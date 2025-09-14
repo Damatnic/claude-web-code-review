@@ -1,0 +1,189 @@
+name: Automated Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+  push:
+    branches: [main, develop]
+  workflow_dispatch:
+    inputs:
+      template:
+        description: 'Review template to use'
+        required: false
+        default: 'best-practices'
+        type: choice
+        options:
+          - best-practices
+          - security
+          - performance
+          - react
+          - api
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: |
+          cd claude-web-code-review
+          npm ci
+      
+      - name: Get changed files
+        id: changed-files
+        uses: tj-actions/changed-files@v41
+        with:
+          files: |
+            **/*.js
+            **/*.jsx
+            **/*.ts
+            **/*.tsx
+            **/*.py
+          separator: ','
+      
+      - name: Review changed files
+        if: steps.changed-files.outputs.any_changed == 'true'
+        run: |
+          cd claude-web-code-review
+          
+          # Create reviews directory
+          mkdir -p reviews
+          
+          # Review each changed file
+          IFS=',' read -ra FILES <<< "${{ steps.changed-files.outputs.all_changed_files }}"
+          for file in "${FILES[@]}"; do
+            echo "Reviewing: $file"
+            node src/review.js file "../$file" \
+              --template ${{ github.event.inputs.template || 'best-practices' }}
+          done
+      
+      - name: Generate summary report
+        if: steps.changed-files.outputs.any_changed == 'true'
+        run: |
+          cd claude-web-code-review
+          
+          # Combine all review reports
+          echo "# Code Review Summary" > review-summary.md
+          echo "" >> review-summary.md
+          echo "**Reviewed Files:** ${{ steps.changed-files.outputs.any_modified_files }}" >> review-summary.md
+          echo "" >> review-summary.md
+          
+          # Aggregate findings
+          node -e "
+          const fs = require('fs');
+          const path = require('path');
+          
+          const reviewsDir = 'reviews';
+          const files = fs.readdirSync(reviewsDir).filter(f => f.endsWith('.json'));
+          
+          let totalFindings = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
+          let allFindings = [];
+          
+          files.forEach(file => {
+            const review = JSON.parse(fs.readFileSync(path.join(reviewsDir, file)));
+            review.findings.forEach(f => {
+              totalFindings[f.severity]++;
+              allFindings.push({...f, file: review.file});
+            });
+          });
+          
+          console.log('## Summary Statistics');
+          console.log('- Critical Issues:', totalFindings.critical);
+          console.log('- High Priority:', totalFindings.high);
+          console.log('- Medium Priority:', totalFindings.medium);
+          console.log('- Low Priority:', totalFindings.low);
+          console.log('- Info:', totalFindings.info);
+          console.log('');
+          
+          if (totalFindings.critical > 0 || totalFindings.high > 0) {
+            console.log('## ⚠️ Action Required');
+            allFindings
+              .filter(f => f.severity === 'critical' || f.severity === 'high')
+              .forEach(f => {
+                console.log('- **' + f.file + ':' + f.line + '** - ' + f.message);
+              });
+          }
+          " >> review-summary.md
+      
+      - name: Comment on PR
+        if: github.event_name == 'pull_request' && steps.changed-files.outputs.any_changed == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const summary = fs.readFileSync('claude-web-code-review/review-summary.md', 'utf8');
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: summary
+            });
+      
+      - name: Upload review artifacts
+        if: steps.changed-files.outputs.any_changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-reviews
+          path: |
+            claude-web-code-review/reviews/
+            claude-web-code-review/review-summary.md
+          retention-days: 30
+      
+      - name: Check for critical issues
+        if: steps.changed-files.outputs.any_changed == 'true'
+        run: |
+          cd claude-web-code-review
+          
+          # Check if any critical issues were found
+          CRITICAL_COUNT=$(find reviews -name "*.json" -exec grep -l '"severity":"critical"' {} \; | wc -l)
+          
+          if [ $CRITICAL_COUNT -gt 0 ]; then
+            echo "❌ Critical issues found in code review"
+            echo "Please address critical issues before merging"
+            exit 1
+          fi
+          
+          echo "✅ No critical issues found"
+
+  memory-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Check file sizes
+        run: |
+          echo "## File Size Check"
+          echo "Files larger than 100KB may need chunking:"
+          find . -type f \( -name "*.js" -o -name "*.jsx" -o -name "*.ts" -o -name "*.tsx" -o -name "*.py" \) -size +100k -exec ls -lh {} \;
+      
+      - name: Estimate token usage
+        run: |
+          echo "## Token Usage Estimation"
+          
+          # Calculate total characters in changed files
+          TOTAL_CHARS=$(find . -type f \( -name "*.js" -o -name "*.jsx" -o -name "*.ts" -o -name "*.tsx" -o -name "*.py" \) -exec wc -c {} \; | awk '{sum+=$1} END {print sum}')
+          ESTIMATED_TOKENS=$((TOTAL_CHARS / 4))
+          
+          echo "Total characters: $TOTAL_CHARS"
+          echo "Estimated tokens: $ESTIMATED_TOKENS"
+          
+          if [ $ESTIMATED_TOKENS -gt 100000 ]; then
+            echo "⚠️ Large codebase detected. Chunking recommended for Claude review."
+          fi

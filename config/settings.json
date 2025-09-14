@@ -1,0 +1,63 @@
+{
+  "memory": {
+    "maxTokensPerChunk": 4000,
+    "maxFileSizeKB": 100,
+    "chunkOverlap": 200,
+    "reviewBatchSize": 5,
+    "maxContextTokens": 100000,
+    "reservedTokens": 10000
+  },
+  "chunking": {
+    "strategy": "smart",
+    "preserveContext": true,
+    "splitOnFunctions": true,
+    "splitOnClasses": true,
+    "minChunkSize": 500,
+    "maxChunkSize": 4000
+  },
+  "review": {
+    "defaultTemplate": "best-practices",
+    "outputFormat": "markdown",
+    "includeMetrics": true,
+    "includeSuggestions": true,
+    "severityLevels": ["critical", "high", "medium", "low", "info"]
+  },
+  "fileTypes": {
+    "javascript": {
+      "extensions": [".js", ".jsx", ".mjs"],
+      "template": "javascript",
+      "chunkStrategy": "function-based"
+    },
+    "typescript": {
+      "extensions": [".ts", ".tsx"],
+      "template": "typescript",
+      "chunkStrategy": "function-based"
+    },
+    "python": {
+      "extensions": [".py"],
+      "template": "python",
+      "chunkStrategy": "class-based"
+    },
+    "react": {
+      "extensions": [".jsx", ".tsx"],
+      "template": "react",
+      "chunkStrategy": "component-based"
+    },
+    "api": {
+      "extensions": [".js", ".ts", ".py"],
+      "template": "api",
+      "chunkStrategy": "endpoint-based"
+    }
+  },
+  "github": {
+    "autoReview": true,
+    "commentOnPR": true,
+    "createIssues": false,
+    "labelReviews": true
+  },
+  "cache": {
+    "enabled": true,
+    "ttl": 900,
+    "maxSize": 100
+  }
+}
